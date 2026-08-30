@@ -1,0 +1,130 @@
+# ============================================================================
+# Docker Compose Configuration for Task Manager Application
+# Services: Frontend (Nginx), Backend (Node.js), Database (PostgreSQL)
+# ============================================================================
+version: '3.8'
+
+services:
+  # ========== POSTGRESQL DATABASE ==========
+  # Persistent data layer for the application
+  db:
+    image: postgres:15-alpine
+    container_name: task-manager-db
+    
+    # Environment variables for database initialization
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: taskdb
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    
+    # Port mapping (internal only - not exposed to host)
+    # Database is only accessible from backend service via network
+    expose:
+      - "5432"
+    
+    # Named volume for persistent data storage
+    # Data survives container restart/recreation
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    
+    # Health check to ensure DB is ready before backend starts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d taskdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    
+    # Restart policy: unless explicitly stopped
+    restart: unless-stopped
+    
+    # Connect to custom Docker network
+    networks:
+      - app-network
+
+  # ========== NODE.JS BACKEND API ==========
+  # REST API server handling business logic
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: task-manager-backend
+    
+    # Environment variables for backend
+    environment:
+      NODE_ENV: production
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_HOST: db  # Service name resolves via Docker DNS
+      DB_PORT: 5432
+      DB_NAME: taskdb
+      PORT: 5000
+    
+    # Port mapping (internal and external)
+    ports:
+      - "5000:5000"
+    
+    # Volumes for development (optional - remove for production)
+    volumes:
+      - ./backend:/app
+      - /app/node_modules  # Prevent overwriting node_modules
+    
+    # Ensure database is ready before starting backend
+    depends_on:
+      db:
+        condition: service_healthy
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Connect to custom Docker network for inter-service communication
+    networks:
+      - app-network
+
+  # ========== REACT FRONTEND ==========
+  # Web UI served by Nginx
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: task-manager-frontend
+    
+    # Environment variables for React
+    environment:
+      - REACT_APP_API_URL=http://backend:5000
+      - CHOKIDAR_USEPOLLING=true  # For live reload in Docker
+    
+    # Port mapping
+    ports:
+      - "3000:80"  # Host:Container port mapping
+    
+    # Volumes for development (optional - remove for production)
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    
+    # Backend must be running before frontend
+    depends_on:
+      - backend
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Connect to custom Docker network
+    networks:
+      - app-network
+
+# ========== VOLUMES ==========
+# Named volume for persistent database storage
+volumes:
+  db_data:
+    driver: local
+
+# ========== NETWORKS ==========
+# Custom bridge network for service discovery
+# Services communicate by container name (DNS resolution)
+# This is better than using hardcoded IPs
+networks:
+  app-network:
+    driver: bridge
